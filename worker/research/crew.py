@@ -51,9 +51,9 @@ class ResearchCrew:
         reader = PageReader(self.llm, self.tools, emit)
         evidence: dict[str, str] = {}
         for lead in leads:
-            page, lead.people, lead.signals = reader.run(lead.source_url, lead.company, personas)
-            if page:
-                evidence[lead.source_url] = page
+            pages, lead.people, lead.signals = reader.run(lead.source_url, lead.domain, lead.company, personas)
+            evidence.update(pages)
+            lead.evidence_urls = list(pages)
 
         kept = Reviewer(emit).run(leads, evidence)
         for lead in kept:

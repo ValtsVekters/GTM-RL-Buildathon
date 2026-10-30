@@ -10,7 +10,7 @@ import json
 import re
 from collections import Counter
 from collections.abc import Callable
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from .ledger import QuotaExceeded
 from .llm import LLM, LLMRequest, LLMUnavailable
@@ -47,7 +47,7 @@ AGGREGATOR_HOSTS = (
 
 def domain_of(value: str) -> str:
     host = urlparse(value if "//" in value else f"//{value}").hostname or ""
-    return host.removeprefix("www.")
+    return host.rstrip(".").removeprefix("www.")
 
 
 def is_aggregator(domain: str) -> bool:
@@ -177,24 +177,86 @@ class PageReader:
     def __init__(self, llm: LLM, tools: Tools, emit: Emit):
         self.llm, self.tools, self.emit = llm, tools, emit
 
-    def run(self, source_url: str, company: str, personas: list[str]) -> tuple[str, list[Person], list[Signal]]:
-        """Returns (page text, people, signals). Empty page text means the source couldn't be read."""
+    def run(self, source_url: str, domain: str, company: str,
+            personas: list[str]) -> tuple[dict[str, str], list[Person], list[Signal]]:
+        """Reads the source page plus up to two About/Team/News pages on the same site, then makes one
+        model call over all of them. Returns ({url: text}, people, signals); {} means the source failed."""
         try:
             page = self.tools.read(source_url)
         except TOOL_ERRORS as exc:
             self.emit(Event(self.name, "error", f"{company}: source unreadable ({exc})"))
-            return "", [], []
-        self.emit(Event(self.name, "tool", f"read {source_url} ({len(page)} chars)"))
-        user = f"Target personas: {', '.join(personas)}\nCompany: {company}\nPage {source_url}:\n{page}"
+            return {}, [], []
+        pages = {source_url: page}
+        # Homepages rarely name staff or news. Only links on the company's own host are followed,
+        # so text on a scraped page can't send the crew to another site.
+        extras = pick_extra_pages(same_site_links(page, source_url, domain)) or [urljoin(source_url, "/about")]
+        for url in extras:
+            if url in pages:
+                continue
+            try:
+                text = self.tools.read(url)
+            except TOOL_ERRORS:
+                self.emit(Event(self.name, "tool", f"{company}: {url} not available"))
+                continue
+            if looks_like_error_page(text):  # a guessed /about often lands on the site's 404 page
+                self.emit(Event(self.name, "tool", f"{company}: {url} is an error page, skipped"))
+                continue
+            pages[url] = text
+        self.emit(Event(self.name, "tool", f"read {len(pages)} page(s) on {domain}: {', '.join(pages)}"))
+        body = "\n\n".join(f"--- {url}\n{text[:PAGE_PROMPT_CHARS]}" for url, text in pages.items())
+        user = f"Target personas: {', '.join(personas)}\nCompany: {company}\nPages from the company's own site:\n{body}"
         try:
             reply, source = self.llm.complete_json(LLMRequest("reader", "bulk", READER_SYSTEM, user, source_url))
         except LLMUnavailable as exc:
             self.emit(Event(self.name, "error", f"{company}: no model available ({exc})"))
-            return page, [], []
+            return pages, [], []
         people = [Person(p["name"], p.get("title", "")) for p in reply.get("people", []) if p.get("name")]
         signals = [Signal(s["signal"], s.get("quote", "")) for s in reply.get("signals", []) if s.get("signal")]
         self.emit(Event(self.name, "model", f"{company}: {len(people)} people, {len(signals)} signals via {source}"))
-        return page, people, signals
+        return pages, people, signals
+
+
+PAGE_PROMPT_CHARS = 3000  # per page, so three pages stay near 2.5k tokens
+# Path words for the extra pages, best group first: who works there, then what's new, then contacts.
+EXTRA_PAGE_WORDS = (
+    ("team", "people", "leadership", "management", "about", "meist", "par-mums", "apie"),
+    ("news", "press", "blog", "uudised", "jaunumi", "naujienos"),
+    ("contact", "kontakt"),
+)
+
+
+def same_site_links(page: str, source_url: str, domain: str) -> list[str]:
+    """Markdown links on the page that stay on the company's own host."""
+    links = []
+    own_path = urlparse(source_url).path.rstrip("/")
+    for href in re.findall(r"\]\(([^)\s]+)\)", page):
+        url = urljoin(source_url, href).split("#")[0]
+        # Same host only, and not the source page again (www. and a trailing slash don't make it new).
+        if url.startswith(("https://", "http://")) and domain_of(url) == domain \
+                and urlparse(url).path.rstrip("/") != own_path:
+            links.append(url)
+    return list(dict.fromkeys(links))
+
+
+_ERROR_PAGE_MARKERS = ("404", "not found", "page does not exist", "page doesn't exist",
+                       "ei eksisteeri", "nav atrasta", "nerastas", "nerasta")
+
+
+def looks_like_error_page(text: str) -> bool:
+    """A short page that says it's missing. Long pages are kept even if "404" appears in them."""
+    low = text.lower()
+    return len(text) < 1500 and any(marker in low for marker in _ERROR_PAGE_MARKERS)
+
+
+def pick_extra_pages(links: list[str], limit: int = 2) -> list[str]:
+    picked: list[str] = []
+    for words in EXTRA_PAGE_WORDS:
+        match = next((u for u in links if u not in picked and any(w in urlparse(u).path.lower() for w in words)), None)
+        if match:
+            picked.append(match)
+        if len(picked) >= limit:
+            break
+    return picked
 
 
 def _normalize(text: str) -> str:
@@ -256,18 +318,19 @@ class Reviewer:
                 lead.review_notes.append("source page could not be read")
                 self.emit(Event(self.name, "drop", f"dropped {lead.company}: source could not be verified"))
                 continue
-            text = _normalize(page)
-            problem = _page_problem(lead, text)
+            problem = _page_problem(lead, _normalize(page))
             if problem:
                 lead.review = "dropped"
                 lead.review_notes.append(problem)
                 self.emit(Event(self.name, "drop", f"dropped {lead.company}: {problem}"))
                 continue
+            # Quotes and people may come from any page the reader fetched on the company's site.
+            text = _normalize(" ".join(evidence.get(url, "") for url in lead.evidence_urls or [lead.source_url]))
             for signal in lead.signals:
                 signal.verified = bool(signal.quote) and _normalize(signal.quote) in text
                 if not signal.verified:
                     lead.review_notes.append(f"removed unsupported claim: {signal.signal}")
-                    self.emit(Event(self.name, "flag", f"{lead.company}: '{signal.signal}' is not on the source page"))
+                    self.emit(Event(self.name, "flag", f"{lead.company}: '{signal.signal}' is not on the pages read"))
             lead.signals = [s for s in lead.signals if s.verified]
             lead.people = self._verified_people(lead, text)
             lead.review = "awaiting_approval"
@@ -281,7 +344,7 @@ class Reviewer:
         for person in lead.people:
             if _normalize(person.name) not in text:
                 lead.review_notes.append(f"removed person not on source page: {person.name}")
-                self.emit(Event(self.name, "flag", f"{lead.company}: {person.name} is not on the source page"))
+                self.emit(Event(self.name, "flag", f"{lead.company}: {person.name} is not on the pages read"))
                 continue
             if person.title and _normalize(person.title) not in text:
                 lead.review_notes.append(f"cleared title not on source page: {person.name}, {person.title}")

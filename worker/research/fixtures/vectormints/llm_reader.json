@@ -8,8 +8,8 @@
     "signals": [{"signal": "rapid member growth", "quote": "We just welcomed 120 new members across our two floors."}]
   },
   "https://rigadeskclub.example": {
-    "people": [{"name": "Anna Liepa", "title": "Office Manager"}],
-    "signals": []
+    "people": [{"name": "Anna Liepa", "title": "Office Manager"}, {"name": "Martins Kalns", "title": "Community Host"}],
+    "signals": [{"signal": "opening a new location", "quote": "We are opening a second space in Tartu next spring."}]
   },
   "https://ironcoregyms.example/locations": {
     "people": [{"name": "Kadri Tamm", "title": "Procurement Manager"}],

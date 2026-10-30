@@ -45,6 +45,7 @@ class Lead:
     industry: str
     why_fit: str
     found_via: str = ""  # search result that named the company, e.g. a directory page
+    evidence_urls: list[str] = field(default_factory=list)  # pages read on the company's own site
     people: list[Person] = field(default_factory=list)
     signals: list[Signal] = field(default_factory=list)
     fit_score: int = 0

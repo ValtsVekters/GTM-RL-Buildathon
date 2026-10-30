@@ -1,6 +1,7 @@
 from dataclasses import replace
 
-from research.agents import MarketScout, Reviewer
+from research.agents import (MarketScout, PageReader, Reviewer, looks_like_error_page, pick_extra_pages,
+                             same_site_links)
 from research.crew import ResearchCrew
 from research.ledger import DEFAULT_QUOTAS, Ledger
 from research.llm import FixtureLLM, LLMRequest
@@ -37,7 +38,7 @@ def by_company(result):
 def test_keeps_only_leads_with_verified_sources():
     result = run_crew()
     assert [lead.company for lead in result.leads] == [
-        "Pulse Arena Esports", "IronCore Gyms", "Northwind Cowork", "Riga Desk Club"]
+        "Pulse Arena Esports", "IronCore Gyms", "Riga Desk Club", "Northwind Cowork"]
     assert [lead.company for lead in result.dropped] == ["Baltic Dev Hub", "Tallinn Esports Hub"]
     assert all(lead.review == "awaiting_approval" for lead in result.leads)
 
@@ -80,7 +81,45 @@ def test_lead_found_in_a_directory_is_read_from_its_own_site():
     riga = by_company(run_crew())["Riga Desk Club"]
     assert riga.source_url == "https://rigadeskclub.example"
     assert riga.found_via == "https://baltic-directory.example/coworking-riga"
-    assert [p.name for p in riga.people] == ["Anna Liepa"]
+
+
+def test_reader_follows_same_site_team_page_only():
+    riga = by_company(run_crew())["Riga Desk Club"]
+    # The partner link is on another domain and the news page doesn't exist: neither is evidence.
+    assert riga.evidence_urls == ["https://rigadeskclub.example", "https://rigadeskclub.example/team"]
+    # Martins and the Tartu opening appear only on the team page, so they verify against it.
+    assert [p.name for p in riga.people] == ["Anna Liepa", "Martins Kalns"]
+    assert [s.signal for s in riga.signals] == ["opening a new location"]
+    assert (riga.fit_score, riga.tier) == (70, "A")
+
+
+def test_reader_skips_guessed_about_page_that_is_a_404():
+    class Site:
+        def read(self, url):
+            if url == "https://gymeesti.ee":
+                return "Paketid. Treeni kõikides jõusaalides üle Eesti."  # no links: You.com strips menus
+            return "[Liigu sisu juurde](https://gymeesti.ee/about#content) veateade 404 oled eksinud teelt."
+
+    class NoModel:
+        def complete_json(self, req):
+            assert "veateade" not in req.user  # the 404 page never reaches the model
+            return {"people": [], "signals": []}, "stub"
+
+    events = []
+    pages, _, _ = PageReader(NoModel(), Site(), events.append).run(
+        "https://gymeesti.ee", "gymeesti.ee", "Gym Eesti OÜ", ["Gym Owner"])
+    assert list(pages) == ["https://gymeesti.ee"]
+    assert any("error page, skipped" in e.message for e in events)
+    assert not looks_like_error_page("x" * 2000 + " call 404 555")  # long real pages are kept
+
+
+def test_same_site_links_and_page_picking():
+    page = ("[About](/about-us) [Blog](https://acme.example/blog/post-1) [Jobs](https://jobs.other.example/acme) "
+            "[Home](https://www.acme.example/) [Contact](https://acme.example/contact#form) [Team](/team)")
+    links = same_site_links(page, "https://acme.example/", "acme.example")
+    assert links == ["https://acme.example/about-us", "https://acme.example/blog/post-1",
+                     "https://acme.example/contact", "https://acme.example/team"]
+    assert pick_extra_pages(links) == ["https://acme.example/about-us", "https://acme.example/blog/post-1"]
 
 
 def test_reviewer_drops_parked_domain():
