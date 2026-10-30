@@ -42,12 +42,17 @@ class LLM(Protocol):
 
 
 GROQ_URL = "https://api.groq.com/openai/v1"
+PARASAIL_URL = "https://api.parasail.io/v1"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 OPENROUTER_URL = "https://openrouter.ai/api/v1"
 
 
 def default_routes() -> dict[str, list[Route]]:
-    fallbacks = [Route("gemini", GEMINI_URL, "GEMINI_API_KEY", os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))]
+    parasail = os.getenv("PARASAIL_CHAT_MODEL", "parasail-qwen-3-next-80b-instruct")
+    fallbacks = [
+        Route("parasail", PARASAIL_URL, "PARASAIL_API_KEY", parasail),
+        Route("gemini", GEMINI_URL, "GEMINI_API_KEY", os.getenv("GEMINI_MODEL", "gemini-2.5-flash")),
+    ]
     if os.getenv("OPENROUTER_MODEL"):
         fallbacks.append(Route("openrouter", OPENROUTER_URL, "OPENROUTER_API_KEY", os.environ["OPENROUTER_MODEL"]))
     reason = os.getenv("GROQ_REASON_MODEL", "llama-3.3-70b-versatile")

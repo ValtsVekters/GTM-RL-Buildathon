@@ -7,6 +7,10 @@
     "people": [{"name": "Ruta Kazlauskaite", "title": "Community Lead"}, {"name": "Janis Berzins", "title": "Office Manager"}],
     "signals": [{"signal": "rapid member growth", "quote": "We just welcomed 120 new members across our two floors."}]
   },
+  "https://rigadeskclub.example": {
+    "people": [{"name": "Anna Liepa", "title": "Office Manager"}],
+    "signals": []
+  },
   "https://ironcoregyms.example/locations": {
     "people": [{"name": "Kadri Tamm", "title": "Procurement Manager"}],
     "signals": [

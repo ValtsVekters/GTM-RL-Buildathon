@@ -38,6 +38,9 @@ yarn-error.log*
 *.db
 *.db-journal
 
+# ruflo hook data
+.claude-flow/
+
 # python worker
 worker/.venv/
 worker/.cache/

@@ -24,7 +24,9 @@ DEFAULT_QUOTAS: dict[str, Quota] = {
     "groq:bulk": Quota(10000, "day"),
     "gemini": Quota(200, "day"),
     "openrouter": Quota(45, "day"),
+    "parasail": Quota(2000, "day"),  # paid credits: a spending guard, not a free limit
     "tavily": Quota(1000, "month"),
+    "you": Quota(500, "day"),  # paid credits: a spending guard, not a free limit
     "jina": Quota(500, "day"),
     "hunter": Quota(50, "month"),
 }

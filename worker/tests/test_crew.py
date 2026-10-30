@@ -1,10 +1,10 @@
 from dataclasses import replace
 
-from research.agents import Reviewer
+from research.agents import MarketScout, Reviewer
 from research.crew import ResearchCrew
 from research.ledger import DEFAULT_QUOTAS, Ledger
 from research.llm import FixtureLLM, LLMRequest
-from research.models import Lead, Person
+from research.models import Lead, Person, SearchResult
 from research.run import FIXTURE_DIR
 from research.tools import FixtureTools
 
@@ -36,14 +36,102 @@ def by_company(result):
 
 def test_keeps_only_leads_with_verified_sources():
     result = run_crew()
-    assert [lead.company for lead in result.leads] == ["Pulse Arena Esports", "IronCore Gyms", "Northwind Cowork"]
-    assert [lead.company for lead in result.dropped] == ["Baltic Dev Hub"]
+    assert [lead.company for lead in result.leads] == [
+        "Pulse Arena Esports", "IronCore Gyms", "Northwind Cowork", "Riga Desk Club"]
+    assert [lead.company for lead in result.dropped] == ["Baltic Dev Hub", "Tallinn Esports Hub"]
     assert all(lead.review == "awaiting_approval" for lead in result.leads)
 
 
-def test_scout_drops_candidate_whose_source_was_not_searched():
-    drops = [e for e in run_crew().events if e.kind == "drop" and e.agent == "Market scout"]
-    assert [e.data["source_url"] for e in drops] == ["https://globalsnack.example/press"]
+def test_scout_drops_candidates_without_a_searched_source_or_own_website():
+    drops = {e.message.split(":")[0].removeprefix("dropped "): e.data["reason"]
+             for e in run_crew().events if e.kind == "drop" and e.agent == "Market scout"}
+    assert drops == {
+        "Global Snack Corp": "source is not a search result",
+        "Kaunas Gaming Lab": "no company website found",  # gave the directory's own domain
+        "Nordic Dev Studio": "no company website found",  # gave a review site's domain
+    }
+
+
+def test_scout_looks_up_a_missing_website_and_checks_its_host():
+    class Reply:
+        def complete_json(self, req):
+            return {"candidates": [
+                {"company": "Gym Eesti OÜ", "domain": "", "source_url": "https://dir.example/gyms"},
+                {"company": "Ghost Corp", "domain": "", "source_url": "https://dir.example/gyms"},
+            ]}, "stub"
+
+    class Search:
+        def search(self, query):
+            if "official website" not in query:
+                return [SearchResult("Gyms", "https://dir.example/gyms", "")]
+            if "Gym Eesti" in query:  # an aggregator first, then a namesake-free company host
+                return [SearchResult("x", "https://www.linkedin.com/company/gym-eesti", ""),
+                        SearchResult("y", "https://www.gymeesti.ee/en", "")]
+            return [SearchResult("z", "https://unrelated.example", "")]  # host doesn't name Ghost Corp
+
+    events = []
+    leads = MarketScout(Reply(), Search(), events.append).run({"industries": [{"name": "Gyms"}]}, 15)
+    assert [(lead.company, lead.source_url, lead.found_via) for lead in leads] == [
+        ("Gym Eesti OÜ", "https://gymeesti.ee", "https://dir.example/gyms")]
+    assert any(e.message == "dropped Ghost Corp: no company website found" for e in events)
+
+
+def test_lead_found_in_a_directory_is_read_from_its_own_site():
+    riga = by_company(run_crew())["Riga Desk Club"]
+    assert riga.source_url == "https://rigadeskclub.example"
+    assert riga.found_via == "https://baltic-directory.example/coworking-riga"
+    assert [p.name for p in riga.people] == ["Anna Liepa"]
+
+
+def test_reviewer_drops_parked_domain():
+    tallinn = next(lead for lead in run_crew().dropped if lead.company == "Tallinn Esports Hub")
+    assert tallinn.review_notes == ["source page is a parked or for-sale domain"]
+
+
+def test_reviewer_accepts_own_host_when_page_text_lacks_the_name():
+    def review(source_url):
+        lead = Lead("Gym Eesti OÜ", "gymeesti.ee", source_url, "Gyms", "")
+        return Reviewer(lambda event: None).run([lead], {source_url: "Paketid. Treeni kõikides jõusaalides."})
+
+    assert len(review("https://gymeesti.ee")) == 1  # brand only in the logo, but the host names it
+    assert review("https://tracxn.com/gyms") == []  # same text on a host that doesn't name it
+
+
+def test_scout_never_fetches_an_unchecked_model_domain():
+    bad_domains = ["127.0.0.1", "localhost", "169.254.169.254", "attacker.example"]
+
+    class Reply:
+        def complete_json(self, req):
+            return {"candidates": [{"company": "Acme Mints", "domain": d, "source_url": "https://dir.example/x"}
+                                   for d in bad_domains]}, "stub"
+
+    class Search:
+        def search(self, query):
+            if "official website" in query:
+                return [SearchResult("ip", "http://10.0.0.5/acme-mints", "")]  # IP literal, never accepted
+            return [SearchResult("dir", "https://dir.example/x", "")]
+
+    events = []
+    assert MarketScout(Reply(), Search(), events.append).run({"industries": [{"name": "Mints"}]}, 15) == []
+    assert sum("no company website found" in e.message for e in events) == len(bad_domains)
+
+
+def test_scout_keeps_one_candidate_per_domain():
+    class OneReplyLLM:
+        def complete_json(self, req):
+            return {"candidates": [
+                {"company": "IronCore Gyms", "domain": "www.ironcoregyms.example", "source_url": "https://a.example/1"},
+                {"company": "IronCore Gym Tartu", "domain": "ironcoregyms.example", "source_url": "https://a.example/2"},
+            ]}, "stub"
+
+    class TwoHits:
+        def search(self, query):
+            return [SearchResult("A", "https://a.example/1", ""), SearchResult("B", "https://a.example/2", "")]
+
+    events = []
+    leads = MarketScout(OneReplyLLM(), TwoHits(), events.append).run({"industries": [{"name": "Gyms"}]}, 15)
+    assert [(lead.company, lead.source_url) for lead in leads] == [("IronCore Gyms", "https://ironcoregyms.example")]
+    assert any("duplicate" in e.message for e in events)
 
 
 def test_reviewer_removes_claim_not_on_source_page():
@@ -63,7 +151,7 @@ def test_reviewer_removes_person_not_on_source_page():
 def test_reviewer_clears_title_not_on_source_page():
     lead = Lead("Pulse Arena Esports", "pulsearena.example", "https://p.example", "Esports organizations", "",
                 people=[Person("Liga Ozola", "Chief Executive Officer")])
-    [kept] = Reviewer(lambda event: None).run([lead], {"https://p.example": "Contact Liga Ozola, Head of Partnerships."})
+    [kept] = Reviewer(lambda event: None).run([lead], {"https://p.example": "Pulse Arena Esports. Contact Liga Ozola, Head of Partnerships."})
     assert [(p.name, p.title) for p in kept.people] == [("Liga Ozola", "")]
 
 
@@ -83,6 +171,14 @@ def test_enrichment_blocks_when_hunter_credits_run_out():
     assert leads["IronCore Gyms"].enrichment == "no_credits"
     assert any(e.kind == "budget" and e.agent == "Contact enricher" for e in result.events)
     assert result.quota_left["hunter"] == 0
+
+
+def test_scout_asks_for_no_more_than_max_leads():
+    llm = RecordingLLM()
+    ledger = Ledger(None)
+    ResearchCrew(llm, FixtureTools(FIXTURE_DIR, ledger), ledger, max_leads=3).run(PRODUCT)
+    scout = next(r for r in llm.requests if r.role == "scout")
+    assert "at most 3 candidates" in scout.system
 
 
 def test_agents_only_see_their_slice():

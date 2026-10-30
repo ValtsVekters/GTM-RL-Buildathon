@@ -9,6 +9,10 @@
     {"title": "Baltic Dev Hub careers", "url": "https://balticdevhub.example/careers",
      "content": "Baltic Dev Hub is a 60-person software office in Riga and is hiring."},
     {"title": "Top 10 Baltic esports teams", "url": "https://esports-rankings.example/top-10-baltic-teams",
-     "content": "Our ranking of the ten best esports teams in Latvia, Lithuania and Estonia this season."}
+     "content": "Our ranking of the ten best esports teams in Latvia, Lithuania and Estonia this season."},
+    {"title": "Best coworking spaces in Riga", "url": "https://baltic-directory.example/coworking-riga",
+     "content": "Our pick of coworking spaces, including Riga Desk Club, Kaunas Gaming Lab and Nordic Dev Studio."},
+    {"title": "Tallinn Esports Hub", "url": "https://tallinnesports.example",
+     "content": "Tallinn Esports Hub, an esports bootcamp in Tallinn."}
   ]
 }

@@ -5,8 +5,10 @@ slice), runs its tool before its model, and returns a plain result to the
 planner. The reviewer and the enricher use no model at all, so they cost no tokens.
 """
 
+import ipaddress
 import json
 import re
+from collections import Counter
 from collections.abc import Callable
 from urllib.parse import urlparse
 
@@ -25,17 +27,42 @@ Give 2-4 industries, 2-4 buyer personas, 2-4 trigger events and 2-3 expansion se
 
 SCOUT_SYSTEM = """You pick B2B prospects out of web search results. Use only companies the results name.
 Reply with one JSON object: {"candidates":[{"company":str,"domain":str,"source_url":str,"industry":str,"why_fit":str}]}
-source_url must be the URL of the result that names the company. industry must be one of the ICP industries.
-Skip directories and listicles that don't describe a single company."""
+source_url is the URL of the result that names the company; a directory or listicle is fine.
+domain is the company's own website domain (like acme.com), never the directory's. Leave it empty if unknown.
+industry must be one of the ICP industries."""
 
-READER_SYSTEM = """You read one company web page and extract sales facts. Use only what the page says.
+READER_SYSTEM = """You read one company's own web page and extract sales facts about that company only.
 Reply with one JSON object: {"people":[{"name":str,"title":str}],"signals":[{"signal":str,"quote":str}]}
+name is a person's name, not a job title. Only include people who work at the company.
 Each quote must be copied word for word from the page. Prefer people whose titles match the target personas."""
+
+# Directories, review sites and social networks: good for finding companies, never
+# evidence about one. A candidate whose "own" domain is one of these is dropped.
+AGGREGATOR_HOSTS = (
+    "clutch.co", "goodfirms.co", "tracxn.com", "crunchbase.com", "linkedin.com", "facebook.com",
+    "instagram.com", "x.com", "twitter.com", "youtube.com", "wikipedia.org", "yelp.com", "glassdoor.com",
+    "indeed.com", "zoominfo.com", "apollo.io", "g2.com", "capterra.com", "trustpilot.com", "medium.com",
+)
 
 
 def domain_of(value: str) -> str:
     host = urlparse(value if "//" in value else f"//{value}").hostname or ""
     return host.removeprefix("www.")
+
+
+def is_aggregator(domain: str) -> bool:
+    return any(domain == host or domain.endswith(f".{host}") for host in AGGREGATOR_HOSTS)
+
+
+def _public_host(domain: str) -> bool:
+    """A dotted hostname, not an IP literal or a single label such as localhost."""
+    if "." not in domain or not re.fullmatch(r"[a-z0-9.-]+", domain):
+        return False
+    try:
+        ipaddress.ip_address(domain)
+    except ValueError:
+        return True
+    return False
 
 
 def build_queries(icp: dict, limit: int = 5) -> list[str]:
@@ -84,22 +111,64 @@ class MarketScout:
         if not results:
             return []
         digest = "\n".join(f"- {r.url} | {r.title} | {r.content[:300]}" for r in results.values())
+        # Capping the list keeps the reply inside the model's output limit (an uncapped
+        # list of 25 results was cut off mid-JSON) and spends fewer tokens.
+        system = (f"{SCOUT_SYSTEM}\nReturn at most {max_leads} candidates, best fit first. "
+                  "Keep why_fit under 15 words.")
         reply, source = self.llm.complete_json(
-            LLMRequest("scout", "bulk", SCOUT_SYSTEM, f"ICP: {json.dumps(brief)}\nResults:\n{digest}")
+            LLMRequest("scout", "bulk", system, f"ICP: {json.dumps(brief)}\nResults:\n{digest}")
         )
-        leads = []
-        for cand in reply.get("candidates", []):
-            url = cand.get("source_url", "")
+        candidates = reply.get("candidates", [])
+        # A site that several candidates were found on is a directory, so it can't be any one company's own site.
+        cited = Counter(domain_of(c.get("source_url", "")) for c in candidates)
+        directory_hosts = {host for host, count in cited.items() if count > 1}
+        leads: list[Lead] = []
+        seen_domains: set[str] = set()
+        for cand in candidates:
+            company, url = cand.get("company", ""), cand.get("source_url", "")
             if url not in results:
-                self.emit(Event(self.name, "drop", f"dropped {cand.get('company')}: source is not a search result",
-                                {"source_url": url}))
+                self._drop(company, "source is not a search result", url)
                 continue
-            leads.append(Lead(company=cand.get("company", ""), domain=domain_of(cand.get("domain") or url),
-                              source_url=url, industry=cand.get("industry", ""), why_fit=cand.get("why_fit", "")))
-            if len(leads) >= max_leads:
-                break
-        self.emit(Event(self.name, "model", f"{len(leads)} candidates with sources via {source}"))
+            domain = domain_of(cand.get("domain") or "")
+            # A model-written domain becomes a fetch target, so it must be a public hostname that
+            # either came back from the search or carries the company's name.
+            searched = domain in {domain_of(u) for u in results} or _host_names(company, domain)
+            if not (domain and searched and _public_host(domain)) or is_aggregator(domain) or domain in directory_hosts:
+                domain = self._find_website(company, directory_hosts)
+            if not domain:
+                self._drop(company, "no company website found", url)
+            elif domain in seen_domains:
+                self._drop(company, f"duplicate of another candidate on {domain}", url)
+            else:
+                seen_domains.add(domain)
+                # Evidence comes from the company's own site: the search result itself when it
+                # is on that site, otherwise the homepage. A directory only helps find it.
+                own_page = url if domain_of(url) == domain else f"https://{domain}"
+                leads.append(Lead(company=company, domain=domain, source_url=own_page, found_via=url,
+                                  industry=cand.get("industry", ""), why_fit=cand.get("why_fit", "")))
+                if len(leads) >= max_leads:
+                    break
+        self.emit(Event(self.name, "model", f"{len(leads)} candidates with their own websites via {source}"))
         return leads
+
+    def _drop(self, company: str, reason: str, source_url: str) -> None:
+        self.emit(Event(self.name, "drop", f"dropped {company}: {reason}", {"source_url": source_url, "reason": reason}))
+
+    def _find_website(self, company: str, directory_hosts: set[str]) -> str:
+        """One search for the company's own site. A hit counts only when its host carries the
+        company's name, so a directory or a namesake page is never taken as the company."""
+        try:
+            hits = self.tools.search(f'"{company}" official website')
+        except TOOL_ERRORS as exc:
+            self.emit(Event(self.name, "error", f"{company}: website lookup failed ({exc})"))
+            return ""
+        for hit in hits:
+            domain = domain_of(hit.url)
+            if (domain and _public_host(domain) and not is_aggregator(domain) and domain not in directory_hosts
+                    and _host_names(company, domain)):
+                self.emit(Event(self.name, "tool", f"{company}: own website is {domain}"))
+                return domain
+        return ""
 
 
 class PageReader:
@@ -133,6 +202,43 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
+_LEGAL_SUFFIXES = {"oü", "ou", "as", "sia", "uab", "ltd", "llc", "inc", "gmbh", "ab", "oy", "plc", "co", "corp"}
+
+
+def _name_words(company: str) -> list[str]:
+    return [w for w in re.sub(r"[^\w\s-]", " ", company.lower()).split() if w not in _LEGAL_SUFFIXES]
+
+
+def _names_company(company: str, text: str) -> bool:
+    """True when the page names the company: its full name without legal suffix, or its first two words."""
+    words = _name_words(company)
+    if not words:
+        return False
+    return " ".join(words) in text or " ".join(words[:2]) in text
+
+
+def _host_names(company: str, domain: str) -> bool:
+    """True when the domain (minus its TLD) carries the company name, e.g. "Gym Eesti OÜ" -> gymeesti.ee."""
+    label = domain.rsplit(".", 1)[0].replace(".", "").replace("-", "")
+    words = [w.replace("-", "") for w in _name_words(company)]
+    if not words:
+        return False
+    return "".join(words) in label or (len(words[0]) >= 4 and words[0] in label)
+
+
+_PARKED_PHRASES = ("domain is for sale", "buy this domain", "domain may be for sale", "this domain is parked")
+
+
+def _page_problem(lead: Lead, text: str) -> str:
+    """Why this page can't count as the company's own, or "" when it can. Homepages often carry the
+    brand only in a logo, so a host that carries the company's name also counts, unless it's parked."""
+    if any(phrase in text for phrase in _PARKED_PHRASES):
+        return "source page is a parked or for-sale domain"
+    if _names_company(lead.company, text) or _host_names(lead.company, domain_of(lead.source_url)):
+        return ""
+    return "source page does not name the company"
+
+
 class Reviewer:
     """Checks every lead against the evidence the crew actually fetched."""
 
@@ -151,6 +257,12 @@ class Reviewer:
                 self.emit(Event(self.name, "drop", f"dropped {lead.company}: source could not be verified"))
                 continue
             text = _normalize(page)
+            problem = _page_problem(lead, text)
+            if problem:
+                lead.review = "dropped"
+                lead.review_notes.append(problem)
+                self.emit(Event(self.name, "drop", f"dropped {lead.company}: {problem}"))
+                continue
             for signal in lead.signals:
                 signal.verified = bool(signal.quote) and _normalize(signal.quote) in text
                 if not signal.verified:

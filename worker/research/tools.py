@@ -1,4 +1,4 @@
-"""Agent tools: web search (Tavily), page reading (Jina Reader), contacts (Hunter).
+"""Agent tools: web search (Tavily or You.com), page reading (Jina Reader or You.com), contacts (Hunter).
 
 Each call goes through the cache first and reserves quota only on a cache miss.
 """
@@ -13,6 +13,9 @@ from .cache import Cache
 from .http import ProviderError, Transport, request_json
 from .ledger import Ledger, QuotaExceeded
 from .models import SearchResult
+
+
+YOU_URL = "https://ydc-index.io/v1"
 
 
 class ToolUnavailable(Exception):
@@ -51,27 +54,61 @@ class LiveTools:
         self.page_chars = page_chars  # pages are cut short to save model tokens
 
     def search(self, query: str) -> list[SearchResult]:
-        key = Cache.key("tavily", query)
+        """Tavily when its free key is set, otherwise You.com."""
+        key = Cache.key("search", query)
         raw = self.cache.get(key)
         if raw is None:
-            api_key = _require("TAVILY_API_KEY")
-            self.ledger.reserve("tavily")  # basic search = 1 credit
-            raw = self.transport("POST", "https://api.tavily.com/search", {"Authorization": f"Bearer {api_key}"},
-                                 {"query": query, "max_results": 5, "search_depth": "basic"})
+            if os.getenv("TAVILY_API_KEY", "").strip():
+                raw = self._search_tavily(query)
+            elif os.getenv("YOU_API_KEY", "").strip():
+                raw = self._search_you(query)
+            else:
+                raise ToolUnavailable("set TAVILY_API_KEY or YOU_API_KEY")
             self.cache.set(key, raw)
         return _results(raw)
 
+    def _search_tavily(self, query: str) -> dict:
+        self.ledger.reserve("tavily")  # basic search = 1 credit
+        return self.transport("POST", "https://api.tavily.com/search",
+                              {"Authorization": f"Bearer {_require('TAVILY_API_KEY')}"},
+                              {"query": query, "max_results": 5, "search_depth": "basic"})
+
+    def _search_you(self, query: str) -> dict:
+        self.ledger.reserve("you")
+        raw = self.transport("POST", f"{YOU_URL}/search", {"X-API-Key": _require("YOU_API_KEY")},
+                             {"query": query, "count": 5})
+        web = raw.get("results", {}).get("web", []) if isinstance(raw, dict) else []
+        return {"results": [
+            {"title": h.get("title", ""), "url": h["url"],
+             "content": " ".join([str(h.get("description", ""))] + [str(s) for s in h.get("snippets", [])[:2]])}
+            for h in web if h.get("url")
+        ]}
+
     def read(self, url: str) -> str:
-        key = Cache.key("jina", url)
+        """Jina with its key; otherwise You.com contents, since keyless Jina is refused on some networks."""
+        key = Cache.key("page", url)
         text = self.cache.get(key)
         if text is None:
-            api_key = os.getenv("JINA_API_KEY", "").strip()
-            self.ledger.reserve("jina")
-            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-            reply = self.transport("GET", f"https://r.jina.ai/{url}", headers, None)
-            text = reply if isinstance(reply, str) else json.dumps(reply)
+            jina_key = os.getenv("JINA_API_KEY", "").strip()
+            if not jina_key and os.getenv("YOU_API_KEY", "").strip():
+                text = self._read_you(url)
+            else:
+                self.ledger.reserve("jina")
+                headers = {"Authorization": f"Bearer {jina_key}"} if jina_key else {}
+                reply = self.transport("GET", f"https://r.jina.ai/{url}", headers, None)
+                text = reply if isinstance(reply, str) else json.dumps(reply)
             self.cache.set(key, text)
         return text[: self.page_chars]
+
+    def _read_you(self, url: str) -> str:
+        self.ledger.reserve("you")
+        reply = self.transport("POST", f"{YOU_URL}/contents", {"X-API-Key": _require("YOU_API_KEY")},
+                               {"urls": [url], "formats": ["markdown"]})
+        pages = reply if isinstance(reply, list) else []
+        text = str(pages[0].get("markdown") or "") if pages and isinstance(pages[0], dict) else ""
+        if not text:
+            raise ToolUnavailable(f"no page content returned for {url}")
+        return text
 
     def find_contacts(self, domain: str) -> list[dict]:
         key = Cache.key("hunter", domain)

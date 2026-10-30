@@ -1,8 +1,10 @@
-"""Check every free research provider key in ../.env with a read-only call.
+"""Check every research provider key in ../.env with a call that spends no quota.
 
-Each check lists models or reads account usage, so no search, generation or
-email lookup is made and no free-tier quota is spent. The one exception is
-Jina without a key: it reads example.com once to prove keyless access works.
+Each check lists models, reads account usage, or sends an empty request that the
+provider rejects only after accepting the key. The one exception is Jina without
+a key: it reads example.com once to prove keyless access works.
+
+The crew is ready when it has at least one working LLM, search and page reader.
 
 Usage (from worker/): uv run python check_keys.py
 """
@@ -20,16 +22,20 @@ from dotenv import load_dotenv
 
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 TIMEOUT_SECONDS = 15
+REQUIRED = {"llm": "LLM", "search": "web search", "reader": "page reader"}
 
 
 @dataclass(frozen=True)
 class Provider:
     env: str
     name: str
+    groups: tuple[str, ...]  # llm | search | reader | contacts
     url: str
     auth: Callable[[str], dict[str, str]]
     summarize: Callable[[object], str]
-    required: bool = True
+    method: str = "GET"
+    body: dict | None = None
+    accepted: tuple[int, ...] = ()  # error statuses that still prove the key was accepted
     keyless_ok: bool = False
 
 
@@ -47,26 +53,37 @@ def _hunter_summary(data) -> str:
     return f"{info.get('plan_name')} plan, requests {json.dumps(info.get('requests'))}"
 
 
+def _parasail_summary(data) -> str:
+    ids = [m.get("id", "") for m in data["data"]]
+    model = os.getenv("PARASAIL_CHAT_MODEL", "parasail-qwen-3-next-80b-instruct")
+    return f"{len(ids)} models, {model} {'listed' if model in ids else 'NOT listed'}"
+
+
 PROVIDERS = [
-    Provider("GROQ_API_KEY", "Groq", "https://api.groq.com/openai/v1/models", _bearer,
+    Provider("GROQ_API_KEY", "Groq", ("llm",), "https://api.groq.com/openai/v1/models", _bearer,
              lambda d: f"{len(d['data'])} models available"),
-    Provider("GEMINI_API_KEY", "Gemini", "https://generativelanguage.googleapis.com/v1beta/models",
+    Provider("PARASAIL_API_KEY", "Parasail", ("llm",), "https://api.parasail.io/v1/models", _bearer,
+             _parasail_summary),
+    Provider("GEMINI_API_KEY", "Gemini", ("llm",), "https://generativelanguage.googleapis.com/v1beta/models",
              lambda k: {"x-goog-api-key": k},
-             lambda d: f"{sum('flash' in m['name'] for m in d['models'])} Flash models available",
-             required=False),
-    Provider("OPENROUTER_API_KEY", "OpenRouter", "https://openrouter.ai/api/v1/key", _bearer,
-             lambda d: f"free tier: {d['data'].get('is_free_tier')}, usage: {d['data'].get('usage')}",
-             required=False),
-    Provider("TAVILY_API_KEY", "Tavily", "https://api.tavily.com/usage", _bearer, _tavily_summary),
-    Provider("JINA_API_KEY", "Jina Reader", "https://r.jina.ai/https://example.com", _bearer,
-             lambda d: "reader works", required=False, keyless_ok=True),
-    Provider("HUNTER_API_KEY", "Hunter", "https://api.hunter.io/v2/account",
+             lambda d: f"{sum('flash' in m['name'] for m in d['models'])} Flash models available"),
+    Provider("OPENROUTER_API_KEY", "OpenRouter", ("llm",), "https://openrouter.ai/api/v1/key", _bearer,
+             lambda d: f"free tier: {d['data'].get('is_free_tier')}, usage: {d['data'].get('usage')}"),
+    Provider("TAVILY_API_KEY", "Tavily", ("search",), "https://api.tavily.com/usage", _bearer, _tavily_summary),
+    # An empty search is refused with 422 once the key is accepted (403 for a bad key), so no search is run.
+    Provider("YOU_API_KEY", "You.com", ("search", "reader"), "https://ydc-index.io/v1/search",
+             lambda k: {"X-API-Key": k}, lambda d: "key accepted", method="POST", body={}, accepted=(422,)),
+    Provider("JINA_API_KEY", "Jina Reader", ("reader",), "https://r.jina.ai/https://example.com", _bearer,
+             lambda d: "reader works", keyless_ok=True),
+    Provider("HUNTER_API_KEY", "Hunter", ("contacts",), "https://api.hunter.io/v2/account",
              lambda k: {"X-API-KEY": k}, _hunter_summary),
 ]
 
 
-def _get(url: str, headers: dict[str, str]) -> object:
-    req = urllib.request.Request(url, headers={"User-Agent": "gtm-engine-keycheck", **headers})
+def _request(provider: Provider, headers: dict[str, str]) -> object:
+    data = json.dumps(provider.body).encode() if provider.body is not None else None
+    req = urllib.request.Request(provider.url, data=data, method=provider.method, headers={
+        "User-Agent": "gtm-engine-keycheck", "Content-Type": "application/json", **headers})
     with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
         body = resp.read()
     try:
@@ -95,8 +112,10 @@ def check(provider: Provider) -> tuple[bool, str]:
     if not key and not provider.keyless_ok:
         return False, f"MISSING  set {provider.env} in .env"
     try:
-        data = _get(provider.url, provider.auth(key) if key else {})
+        data = _request(provider, provider.auth(key) if key else {})
     except urllib.error.HTTPError as exc:
+        if exc.code in provider.accepted:
+            return True, "OK       key accepted"
         reason = _error_message(exc)
         # Gemini answers a bad key with 400 API_KEY_INVALID instead of 401.
         if exc.code in (401, 403) or "API_KEY_INVALID" in reason:
@@ -117,17 +136,19 @@ def check(provider: Provider) -> tuple[bool, str]:
 
 def main() -> int:
     load_dotenv(ENV_FILE)
-    failed_required = []
+    working: set[str] = set()
     for provider in PROVIDERS:
         ok, message = check(provider)
-        tag = "required" if provider.required else "optional"
-        print(f"{provider.name:<12} [{tag}] {message}")
-        if provider.required and not ok:
-            failed_required.append(provider.name)
-    if failed_required:
-        print(f"\nNot ready: {', '.join(failed_required)}")
+        print(f"{provider.name:<12} [{'/'.join(provider.groups)}] {message}")
+        if ok:
+            working.update(provider.groups)
+    missing = [label for group, label in REQUIRED.items() if group not in working]
+    if "contacts" not in working:
+        print("\nNote: no Hunter key, so tier-A leads get no email lookup.")
+    if missing:
+        print(f"Not ready: no working {', '.join(missing)}")
         return 1
-    print("\nAll required providers ready.")
+    print("\nReady: the crew has a working LLM, search and page reader.")
     return 0
 
 
