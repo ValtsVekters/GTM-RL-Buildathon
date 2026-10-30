@@ -8,6 +8,7 @@
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -29,6 +30,25 @@ def print_event(event: Event) -> None:
     print(f"[{event.agent}] {event.kind:<6} {event.message}")
 
 
+def sample_product() -> str:
+    return (FIXTURE_DIR / "product.txt").read_text(encoding="utf-8").strip()
+
+
+def build_crew(fixture: bool, max_leads: int, quotas: dict | None = None,
+               on_event: Callable[[Event], None] | None = None) -> ResearchCrew:
+    """Offline crew on saved sample data, or the live crew on the providers in ../.env."""
+    quotas = quotas or dict(DEFAULT_QUOTAS)
+    if fixture:
+        ledger = Ledger(None, quotas)
+        llm, tools = FixtureLLM(FIXTURE_DIR), FixtureTools(FIXTURE_DIR, ledger)
+    else:
+        load_dotenv(WORKER_DIR.parent / ".env")
+        ledger = Ledger(CACHE_DIR / "quota.json", quotas)
+        cache = Cache(CACHE_DIR / "responses")
+        llm, tools = LLMRouter(ledger, cache), LiveTools(ledger, cache)
+    return ResearchCrew(llm, tools, ledger, on_event=on_event, max_leads=max_leads)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the free-tier research crew.")
     parser.add_argument("product", nargs="?", help="what you sell, in one or two sentences")
@@ -42,22 +62,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.hunter_credits is not None:
         quotas["hunter"] = replace(quotas["hunter"], limit=min(args.hunter_credits, quotas["hunter"].limit))
 
-    if args.fixture:
-        product = args.product or (FIXTURE_DIR / "product.txt").read_text(encoding="utf-8").strip()
-        ledger = Ledger(None, quotas)
-        llm, tools = FixtureLLM(FIXTURE_DIR), FixtureTools(FIXTURE_DIR, ledger)
-    else:
-        if not args.product:
-            parser.error("give a product description, or use --fixture")
-        load_dotenv(WORKER_DIR.parent / ".env")
-        product = args.product
-        ledger = Ledger(CACHE_DIR / "quota.json", quotas)
-        cache = Cache(CACHE_DIR / "responses")
-        llm, tools = LLMRouter(ledger, cache), LiveTools(ledger, cache)
+    if not args.fixture and not args.product:
+        parser.error("give a product description, or use --fixture")
+    product = args.product or sample_product()
 
     print(f"Product: {product}\n")
     try:
-        result = ResearchCrew(llm, tools, ledger, on_event=print_event, max_leads=args.max_leads).run(product)
+        result = build_crew(args.fixture, args.max_leads, quotas, print_event).run(product)
     except LLMUnavailable as exc:
         print(f"\nNo model available: {exc}\nRun check_keys.py to see which keys are missing.")
         return 1

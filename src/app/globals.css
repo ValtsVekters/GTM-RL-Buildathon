@@ -1,26 +1,57 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* Paper-and-highlighter palette: cool paper, pine ink, moss for action and tier A,
+   plum for anything dropped or flagged, and highlighter yellow reserved for verified quotes. */
+@theme {
+  --color-paper: #f2f5f3;
+  --color-panel: #ffffff;
+  --color-ink: #142b26;
+  --color-muted: #566661;
+  --color-moss: #2f6b5a;
+  --color-moss-soft: #dcebe5;
+  --color-highlighter: #f3d34a;
+  --color-plum: #7a2e57;
+  --color-plum-soft: #f3e3ec;
+  --color-rule: #d5ddd9;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-instrument), ui-sans-serif, system-ui, sans-serif;
+  --font-quote: var(--font-newsreader), Georgia, serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root {
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-moss);
+  outline-offset: 2px;
+}
+
+/* A verified quote, marked like a reviewer's highlighter pass. The swipe draws in once,
+   when the reader opens a lead. */
+.evidence {
+  background-image: linear-gradient(transparent 56%, var(--color-highlighter) 56%, var(--color-highlighter) 90%, transparent 90%);
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  animation: swipe 520ms ease-out both;
+}
+
+@keyframes swipe {
+  from { background-size: 0% 100%; }
+  to { background-size: 100% 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .evidence { animation: none; }
+  * { scroll-behavior: auto !important; }
 }
