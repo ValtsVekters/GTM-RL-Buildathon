@@ -1,0 +1,14 @@
+{
+  "*": [
+    {"title": "Pulse Arena Esports opens a Tallinn training facility", "url": "https://pulsearena.example/news/tallinn-facility",
+     "content": "Riga-based esports organization Pulse Arena Esports, 40 players across five teams, is opening a second training facility in Tallinn."},
+    {"title": "Northwind Cowork: flexible offices in Vilnius", "url": "https://northwindcowork.example/about",
+     "content": "Northwind Cowork runs flexible offices for startups in Vilnius and just welcomed 120 new members."},
+    {"title": "IronCore Gyms locations", "url": "https://ironcoregyms.example/locations",
+     "content": "IronCore Gyms operates four fitness clubs in Estonia, with a fifth opening in Tartu."},
+    {"title": "Baltic Dev Hub careers", "url": "https://balticdevhub.example/careers",
+     "content": "Baltic Dev Hub is a 60-person software office in Riga and is hiring."},
+    {"title": "Top 10 Baltic esports teams", "url": "https://esports-rankings.example/top-10-baltic-teams",
+     "content": "Our ranking of the ten best esports teams in Latvia, Lithuania and Estonia this season."}
+  ]
+}

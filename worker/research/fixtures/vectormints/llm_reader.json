@@ -1,0 +1,17 @@
+{
+  "https://pulsearena.example/news/tallinn-facility": {
+    "people": [{"name": "Liga Ozola", "title": "Head of Partnerships"}],
+    "signals": [{"signal": "opening a new location", "quote": "We are opening a second training facility in Tallinn this spring."}]
+  },
+  "https://northwindcowork.example/about": {
+    "people": [{"name": "Ruta Kazlauskaite", "title": "Community Lead"}],
+    "signals": [{"signal": "rapid member growth", "quote": "We just welcomed 120 new members across our two floors."}]
+  },
+  "https://ironcoregyms.example/locations": {
+    "people": [{"name": "Kadri Tamm", "title": "Procurement Manager"}],
+    "signals": [
+      {"signal": "opening a new location", "quote": "Our fifth location opens in Tartu in March."},
+      {"signal": "signed a national supplement distribution deal", "quote": "IronCore signed an exclusive deal with a national supplement distributor."}
+    ]
+  }
+}

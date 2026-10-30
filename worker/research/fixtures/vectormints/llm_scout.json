@@ -1,0 +1,14 @@
+{
+  "candidates": [
+    {"company": "Pulse Arena Esports", "domain": "pulsearena.example", "source_url": "https://pulsearena.example/news/tallinn-facility",
+     "industry": "Esports organizations", "why_fit": "40 players training long days, opening a second facility"},
+    {"company": "Northwind Cowork", "domain": "northwindcowork.example", "source_url": "https://northwindcowork.example/about",
+     "industry": "Coworking and offices", "why_fit": "Fast-growing coworking space with a shared kitchen"},
+    {"company": "IronCore Gyms", "domain": "ironcoregyms.example", "source_url": "https://ironcoregyms.example/locations",
+     "industry": "Fitness clubs and gyms", "why_fit": "Gym chain adding a fifth club, sells front-desk snacks"},
+    {"company": "Baltic Dev Hub", "domain": "balticdevhub.example", "source_url": "https://balticdevhub.example/careers",
+     "industry": "Coworking and offices", "why_fit": "60-person office, hiring"},
+    {"company": "Global Snack Corp", "domain": "globalsnack.example", "source_url": "https://globalsnack.example/press",
+     "industry": "Coworking and offices", "why_fit": "Mentioned by the model but not in any search result"}
+  ]
+}

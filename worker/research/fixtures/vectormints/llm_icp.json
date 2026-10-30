@@ -1,0 +1,22 @@
+{
+  "industries": [
+    {"name": "Esports organizations", "naics": "711211", "confidence": 0.82},
+    {"name": "Coworking and offices", "naics": "531120", "confidence": 0.74},
+    {"name": "Fitness clubs and gyms", "naics": "713940", "confidence": 0.71}
+  ],
+  "company_sizes": ["20-200 employees"],
+  "regions": ["Latvia", "Lithuania", "Estonia"],
+  "personas": [
+    {"title": "Head of Partnerships", "confidence": 0.8},
+    {"title": "Office Manager", "confidence": 0.77},
+    {"title": "Procurement Manager", "confidence": 0.7}
+  ],
+  "triggers": [
+    {"signal": "opening a new location", "confidence": 0.76},
+    {"signal": "rapid member or headcount growth", "confidence": 0.68}
+  ],
+  "expansions": [
+    {"segment": "University gaming clubs", "reason": "Late-night study and play sessions need focus without sugary energy drinks", "confidence": 0.55},
+    {"segment": "Logistics night shifts", "reason": "Shift workers need alertness they can carry in a pocket", "confidence": 0.48}
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "pulsearena.example": [
+    {"value": "liga.ozola@pulsearena.example", "first_name": "Liga", "last_name": "Ozola", "position": "Head of Partnerships",
+     "confidence": 94, "verification": {"status": "valid"}},
+    {"value": "info@pulsearena.example", "first_name": null, "last_name": null, "position": null,
+     "confidence": 60, "verification": {"status": "valid"}}
+  ],
+  "ironcoregyms.example": [
+    {"value": "kadri.tamm@ironcoregyms.example", "first_name": "Kadri", "last_name": "Tamm", "position": "Procurement Manager",
+     "confidence": 81, "verification": {"status": "accept_all"}},
+    {"value": "marko.kask@ironcoregyms.example", "first_name": "Marko", "last_name": "Kask", "position": "Head of Operations",
+     "confidence": 72, "verification": {"status": "unknown"}}
+  ]
+}

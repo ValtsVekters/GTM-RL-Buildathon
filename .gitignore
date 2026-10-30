@@ -40,7 +40,9 @@ yarn-error.log*
 
 # python worker
 worker/.venv/
-worker/__pycache__/
+worker/.cache/
+__pycache__/
+.pytest_cache/
 
 # vercel
 .vercel
