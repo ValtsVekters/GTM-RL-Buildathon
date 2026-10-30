@@ -1,0 +1,34 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Lead {
+  id               String       @id @default(cuid())
+  company          String
+  contactName      String?
+  contactTitle     String?
+  sourceUrl        String
+  stage            String       @default("Matched")
+  fitScore         Int          @default(0)
+  tier             String       @default("C")
+  enrichmentStatus String       @default("pending")
+  createdAt        DateTime     @default(now())
+  audit            AuditEntry[]
+}
+
+model AuditEntry {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id])
+  actor     String
+  action    String
+  createdAt DateTime @default(now())
+}
