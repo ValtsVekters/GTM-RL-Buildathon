@@ -1,8 +1,10 @@
 from dataclasses import replace
 
+from research.agents import Reviewer
 from research.crew import ResearchCrew
 from research.ledger import DEFAULT_QUOTAS, Ledger
 from research.llm import FixtureLLM, LLMRequest
+from research.models import Lead, Person
 from research.run import FIXTURE_DIR
 from research.tools import FixtureTools
 
@@ -48,6 +50,21 @@ def test_reviewer_removes_claim_not_on_source_page():
     ironcore = by_company(run_crew())["IronCore Gyms"]
     assert [s.signal for s in ironcore.signals] == ["opening a new location"]
     assert any("supplement" in note for note in ironcore.review_notes)
+
+
+def test_reviewer_removes_person_not_on_source_page():
+    # The reader fixture invents "Janis Berzins, Office Manager" for Northwind. Kept, that
+    # persona match would lift Northwind to tier A and spend a Hunter credit.
+    northwind = by_company(run_crew())["Northwind Cowork"]
+    assert [p.name for p in northwind.people] == ["Ruta Kazlauskaite"]
+    assert (northwind.tier, northwind.enrichment) == ("B", "skipped")
+
+
+def test_reviewer_clears_title_not_on_source_page():
+    lead = Lead("Pulse Arena Esports", "pulsearena.example", "https://p.example", "Esports organizations", "",
+                people=[Person("Liga Ozola", "Chief Executive Officer")])
+    [kept] = Reviewer(lambda event: None).run([lead], {"https://p.example": "Contact Liga Ozola, Head of Partnerships."})
+    assert [(p.name, p.title) for p in kept.people] == [("Liga Ozola", "")]
 
 
 def test_tiers_and_enrichment_follow_the_score():

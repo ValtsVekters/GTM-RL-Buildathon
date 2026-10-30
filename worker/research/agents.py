@@ -157,9 +157,25 @@ class Reviewer:
                     lead.review_notes.append(f"removed unsupported claim: {signal.signal}")
                     self.emit(Event(self.name, "flag", f"{lead.company}: '{signal.signal}' is not on the source page"))
             lead.signals = [s for s in lead.signals if s.verified]
+            lead.people = self._verified_people(lead, text)
             lead.review = "awaiting_approval"
             kept.append(lead)
         return kept
+
+    def _verified_people(self, lead: Lead, text: str) -> list[Person]:
+        """People raise the fit score and so decide who spends Hunter credits: a name
+        must be on the source page, and a title that isn't there earns no persona points."""
+        verified = []
+        for person in lead.people:
+            if _normalize(person.name) not in text:
+                lead.review_notes.append(f"removed person not on source page: {person.name}")
+                self.emit(Event(self.name, "flag", f"{lead.company}: {person.name} is not on the source page"))
+                continue
+            if person.title and _normalize(person.title) not in text:
+                lead.review_notes.append(f"cleared title not on source page: {person.name}, {person.title}")
+                person.title = ""
+            verified.append(person)
+        return verified
 
 
 _EMAIL_STATUS = {"valid": "valid", "accept_all": "risky"}

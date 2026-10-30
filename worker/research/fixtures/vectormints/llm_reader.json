@@ -4,7 +4,7 @@
     "signals": [{"signal": "opening a new location", "quote": "We are opening a second training facility in Tallinn this spring."}]
   },
   "https://northwindcowork.example/about": {
-    "people": [{"name": "Ruta Kazlauskaite", "title": "Community Lead"}],
+    "people": [{"name": "Ruta Kazlauskaite", "title": "Community Lead"}, {"name": "Janis Berzins", "title": "Office Manager"}],
     "signals": [{"signal": "rapid member growth", "quote": "We just welcomed 120 new members across our two floors."}]
   },
   "https://ironcoregyms.example/locations": {
